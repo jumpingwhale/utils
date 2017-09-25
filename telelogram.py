@@ -24,6 +24,9 @@ _MAX_BYTES = 5*1024*1024
 _MAX_BACKUP = 5
 
 
+_LOG_NAME = ''
+
+
 class _Telegram:
     """Telegram 봇 관리 클래스"""
 
@@ -116,12 +119,27 @@ class _TelegramHandler(logging.StreamHandler):
             self.handleError(record)
 
 
-def setup_log(logpath=None, logname=NOTSET, loglevel=DEBUG, apikey=None):
+def _exception_hook(exc_type, exc_value, exc_traceback):
+    """
+    Unhandled exption 을 위한 전역 예외처리기
+
+    :param exc_type:
+    :param exc_value:
+    :param exc_traceback:
+    :return:
+    """
+    # if issubclass(exc_type, KeyboardInterrupt):  # 키보드 인터럽트의 경우
+    #     sys.__excepthook__(exc_type, exc_value, exc_traceback)  # 흑 원본 호출
+    logging.getLogger(_LOG_NAME).critical('Unhandled exception', exc_info=(exc_type, exc_value, exc_traceback))
+
+
+def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=False):
     """
     전역로거를 설치한다
 
     로거는 '이름'으로 접근할 수 있다
-    이름을 명시하지 않으면, 'root' 로거를 WARNING 레벨로 자동으로 가져온다
+    이름을 명시하지 않으면, 현재 모듈이름을 DEBUG 레벨로 자동으로 가져온다
+
     'root' 로거 사용시 파이썬 내장 모듈의 로그도 같이 뜰 것이니 주의
 
     logging.getLogger('MyLoggerName').debug('My debug msg') 와 같이
@@ -133,6 +151,10 @@ def setup_log(logpath=None, logname=NOTSET, loglevel=DEBUG, apikey=None):
     logpath 명시 안하면, stderr 로만 로그를 출력한다
     텔레그램 봇이 없다고? apikey 를 생략하면 된다
 
+    hook 은 전역 예외처리기에 관한 부분
+    전역 예외처리기 등록시 예상치 못한 에러에도 앱을 계속 실행할 수 있다
+    단, multi thread 환경에선 불가
+
     :param logpath: 로그파일 저장경로(파일명 포함)
     :type logpath: str
     :param logname: 로거 이름
@@ -141,45 +163,58 @@ def setup_log(logpath=None, logname=NOTSET, loglevel=DEBUG, apikey=None):
     :type loglevel: int
     :param apikey: 텔레그램 봇 api키
     :type apikey: str
+    :param hook: 전역 예외처리 훅 설치 여부
+    :type hook: bool
     """
+    # exception_hook 을 위한 글로벌 로거명 설정
+    global _LOG_NAME
+    _LOG_NAME = logname
+
     # logger 인스턴스를 생성
     _logger = logging.getLogger(logname)
 
     # 로깅 레벨 설정
     _logger.setLevel(loglevel)
 
-    # 로그 포맷 설정
-    _formatter = logging.Formatter('[%(levelname)s|%(filename)s:%(lineno)s] %(asctime)s > %(message)s')
-
-    # 로그파일 경로가 명시된 경우 저장경로 세팅 (로그를 파일로도 저장하는 경우)
-    _log_path = None
-    _file = None
+    # 파일로그의 경우
     if isinstance(logpath, str):
+        # 저장경로 설정
         _main_path = os.path.dirname(os.path.abspath(sys.modules['__main__'].__file__))
         _log_path = os.path.join(_main_path, logpath)  # (원본실행위치 + 상대경로)
 
-    # 로깅 핸들러 설정
-    if _log_path:  # 파일저장용 핸들러
+        # 핸들러 설정
         _file = RotatingFileHandler(_log_path, mode='a', maxBytes=_MAX_BYTES, backupCount=_MAX_BACKUP)
-    _stderr = logging.StreamHandler()  # stderr 출력용 핸들러
-    _telegram = _TelegramHandler(apikey)  # Telegram 전송용 핸들러
 
-    # specify handler's logging format
-    if _log_path:
-        _file.setFormatter(_formatter)
-    _stderr.setFormatter(_formatter)
-    _telegram.setFormatter(_formatter)
-
-    # set Handler to logger
-    if _log_path:
+        # 핸들러 로거에 추가
         _logger.addHandler(_file)
-    _logger.addHandler(_stderr)
-    _logger.addHandler(_telegram)
 
-    if _log_path:
-        _logger.debug('Logger initiated, log file path is \'%s\'' % _log_path)
-    else:
-        _logger.debug('Logger initiated as fileless mode')
+    # 텔레그램로그의 경우
+    if isinstance(apikey, str):
+        # 핸들러 설정
+        _telegram = _TelegramHandler(apikey)
+
+        # 핸들러 로거에 추가
+        _logger.addHandler(_telegram)
+
+    # 기본로그(stderr) 의 경우
+    if True:
+        # 핸들러 설정
+        _stderr = logging.StreamHandler()  # stderr 출력용 핸들러
+
+        # 핸들러 로거에 추가
+        _logger.addHandler(_stderr)
+
+    # 전체 핸들러에 대한 로그 포맷롸 로그레벨 설정
+    _formatter = logging.Formatter('[%(levelname)s|%(filename)s:%(lineno)s] %(asctime)s > %(message)s')
+    for handlr in _logger.handlers:
+        handlr.setFormatter(_formatter)
+        handlr.setLevel(loglevel)
+
+    # 전역 에러 핸들러 설정, main 쓰레드의 예상치 못한 에러에도 계속 실행이 가능하다
+    if hook:
+        sys.excepthook = _exception_hook
+
+    _logger.warning('Logger \'%s\' initiated with %s' % (logname, str(_logger.handlers)))
 
 
 def __how_to_use():
@@ -193,13 +228,11 @@ def __how_to_use():
     5. logging.getLogger('mylogger').debug('My debug msg')  # 어디서든 이 형태로 출력 가능
     :return:
     """
-    setup_log(logname='mylogger', loglevel=DEBUG, apikey='MY_API_KEY')
-
+    setup_log(logname='mylogger', loglevel=DEBUG, apikey='MY_API_KEY', hook=True)
     while True:
-        msg = input('type any: ')
-        logging.getLogger('mylogger').debug(str(msg))
+        msg = input('Type anything: ')
+        logging.getLogger('mylogger').debug('Test log: \'%s\'' % str(msg))
 
 
 if __name__ == '__main__':
     pass
-
