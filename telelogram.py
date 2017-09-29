@@ -4,6 +4,8 @@
 import os
 import sys
 import logging
+import threading
+from queue import Queue
 from logging.handlers import RotatingFileHandler
 from telepot import Bot, glance
 try:
@@ -27,10 +29,10 @@ _MAX_BACKUP = 5
 _LOG_NAME = ''
 
 
-class _Telegram:
+class _Telegram(threading.Thread):
     """Telegram 봇 관리 클래스"""
 
-    def __init__(self, token):
+    def __init__(self, token, queue):
         """
         봇 초기화 및 메시지루프 등록
 
@@ -42,10 +44,16 @@ class _Telegram:
         :param token: 텔레그램 봇 API 키
         :type token: str
         """
+        threading.Thread.__init__(self)
         self.bot = Bot(token)
         self.bot.message_loop(self.msg_handler)
 
         self.chat_ids = set([])  # 메시지를 전송할 chat_id 리스트(set([]) 는 리스트와 동일하게 사용가능)
+
+        self.queue = queue
+
+    def __del__(self):
+        self.bot.deleteWebhook()
 
     def send_log(self, msg):
         """등록한 모든 사용자에게 로그 전송
@@ -88,14 +96,28 @@ class _Telegram:
             else:
                 self.bot.sendMessage(chat_id, 'You said \'%s\'' % msg['text'])
 
+    def run(self):
+        while True:
+            msg = self.queue.get()
+            self.send_log(msg)
+
 
 class _TelegramHandler(logging.StreamHandler):
     """텔레그램 메시지 전송을 위한 로그메시지 핸들러"""
     def __init__(self, apikey=None):
         super().__init__(None)
 
-        # 텔레그램 메시지 전송용 클래스 생성
-        self.telegram = _Telegram(apikey)
+        # 텔레그램 전송은 오래 걸리니, 큐를 통해 관리
+        self.queue = Queue()
+
+        # 텔레그램 메시지 전송용 쓰레드 생성
+        self.thread_telegram = _Telegram(apikey, self.queue)
+        self.thread_telegram.start()
+
+    def __del__(self):
+        del self.thread_telegram
+        self.queue.empty()
+        del self.queue
 
     def emit(self, record):
         """
@@ -113,7 +135,7 @@ class _TelegramHandler(logging.StreamHandler):
             msg = self.format(record)
 
             # 텔레그램에 전달
-            self.telegram.send_log(msg)
+            self.queue.put(msg)
             self.flush()
         except Exception:
             self.handleError(record)
