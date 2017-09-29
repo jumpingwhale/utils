@@ -114,13 +114,14 @@ class _TelegramHandler(logging.StreamHandler):
         self.last_msg = 'No logs yet'
 
         # 텔레그램 메시지 전송용 쓰레드 생성
+        self.thread_telegram = _Telegram(apikey, self.queue)
+        self.thread_telegram.start()
+
+        # KeepAlive 용 쓰레드 생성
         self.keepalive = keepalive  # keepalive 메시지 전송간격 (초)
         if self.keepalive and isinstance(self.keepalive, int):
-            self.thread_telegram = _Telegram(apikey, self.queue)
-            self.thread_telegram.start()
-
-        self.hthread = threading.Thread(target=self.emit_keepalive)
-        self.hthread.start()
+            self.hthread = threading.Thread(target=self.emit_keepalive)
+            self.hthread.start()
 
     def __del__(self):
         del self.thread_telegram
