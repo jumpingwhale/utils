@@ -5,7 +5,7 @@ import os
 import sys
 import logging
 import threading
-from queue import Queue
+from queue import PriorityQueue
 from logging.handlers import RotatingFileHandler
 from telepot import Bot, glance
 try:
@@ -87,32 +87,40 @@ class _Telegram(threading.Thread):
         if content_type is 'text':
             if msg['text'] == '/enter':
                 self.chat_ids.add(chat_id)
-                self.send_msg(chat_id, 'Your chat_id(%d) is registered to Telelogram' % chat_id)
-                self.send_msg(chat_id, 'current users: %d' % len(self.chat_ids))
+                self.queue.put((0, 'Chat_id(%d) is registered to Telelogram' % chat_id))
+                self.queue.put((0, 'current users: %d' % len(self.chat_ids)))
             elif msg['text'] == '/exit':
                 self.chat_ids.remove(chat_id)
-                self.send_msg(chat_id, 'Your chat_id(%d) is deleted from Telelogram' % chat_id)
-                self.send_msg(chat_id, 'current users: %d' % len(self.chat_ids))
+                self.queue.put((0, 'Chat_id(%d) is deleted from Telelogram' % chat_id))
+                self.queue.put((0, 'current users: %d' % len(self.chat_ids)))
             else:
-                self.bot.sendMessage(chat_id, 'You said \'%s\'' % msg['text'])
+                self.queue.put((0, 'Chat_Id(%d) said \'%s\'' % (chat_id, msg['text'])))
 
     def run(self):
         while True:
-            msg = self.queue.get()
+            _priority, msg = self.queue.get()
             self.send_log(msg)
 
 
 class _TelegramHandler(logging.StreamHandler):
     """텔레그램 메시지 전송을 위한 로그메시지 핸들러"""
-    def __init__(self, apikey=None):
+    def __init__(self, apikey=None, keepalive=0):
         super().__init__(None)
 
-        # 텔레그램 전송은 오래 걸리니, 큐를 통해 관리
-        self.queue = Queue()
+        # 텔레그램 동시전송 방지를 위해 큐로 변경
+        self.queue = PriorityQueue()
+
+        # 가장 최신 로그 저장변수
+        self.last_msg = 'No logs yet'
 
         # 텔레그램 메시지 전송용 쓰레드 생성
-        self.thread_telegram = _Telegram(apikey, self.queue)
-        self.thread_telegram.start()
+        self.keepalive = keepalive  # keepalive 메시지 전송간격 (초)
+        if self.keepalive and isinstance(self.keepalive, int):
+            self.thread_telegram = _Telegram(apikey, self.queue)
+            self.thread_telegram.start()
+
+        self.hthread = threading.Thread(target=self.emit_keepalive)
+        self.hthread.start()
 
     def __del__(self):
         del self.thread_telegram
@@ -133,12 +141,19 @@ class _TelegramHandler(logging.StreamHandler):
         try:
             # 로그메시지 수신
             msg = self.format(record)
+            self.last_msg = msg
 
             # 텔레그램에 전달
-            self.queue.put(msg)
+            self.queue.put((1, msg))
             self.flush()
         except Exception:
             self.handleError(record)
+
+    def emit_keepalive(self):
+        import time
+        while True:
+            time.sleep(self.keepalive)
+            self.queue.put((0, 'KEEP ALIVE - ' + self.last_msg))
 
 
 def _exception_hook(exc_type, exc_value, exc_traceback):
@@ -155,7 +170,7 @@ def _exception_hook(exc_type, exc_value, exc_traceback):
     logging.getLogger(_LOG_NAME).critical('Unhandled exception', exc_info=(exc_type, exc_value, exc_traceback))
 
 
-def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=False):
+def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=False, keepalive=0):
     """
     전역로거를 설치한다
 
@@ -187,6 +202,8 @@ def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=
     :type apikey: str
     :param hook: 전역 예외처리 훅 설치 여부
     :type hook: bool
+    :param keepalive: keep alive 전송 간격
+    :type keepalive: int
     """
     # exception_hook 을 위한 글로벌 로거명 설정
     global _LOG_NAME
@@ -213,7 +230,7 @@ def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=
     # 텔레그램로그의 경우
     if isinstance(apikey, str):
         # 핸들러 설정
-        _telegram = _TelegramHandler(apikey)
+        _telegram = _TelegramHandler(apikey, keepalive)
 
         # 핸들러 로거에 추가
         _logger.addHandler(_telegram)
@@ -226,7 +243,7 @@ def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=
         # 핸들러 로거에 추가
         _logger.addHandler(_stderr)
 
-    # 전체 핸들러에 대한 로그 포맷롸 로그레벨 설정
+    # 전체 핸들러에 대한 로그 포맷과 로그레벨 설정
     _formatter = logging.Formatter('[%(levelname)s|%(filename)s:%(lineno)s] %(asctime)s > %(message)s')
     for handlr in _logger.handlers:
         handlr.setFormatter(_formatter)
@@ -236,7 +253,7 @@ def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=
     if hook:
         sys.excepthook = _exception_hook
 
-    _logger.warning('Logger \'%s\' initiated with %s' % (logname, str(_logger.handlers)))
+    _logger.info('Logger \'%s\' initiated with %s' % (logname, str(_logger.handlers)))
 
 
 def __how_to_use():
