@@ -256,6 +256,8 @@ def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=
 
     _logger.info('Logger \'%s\' initiated with %s' % (logname, str(_logger.handlers)))
 
+    return _logger
+
 
 def __how_to_use():
     """
