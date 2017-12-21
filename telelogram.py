@@ -56,7 +56,8 @@ class _Telegram(threading.Thread):
         self.bot.deleteWebhook()
 
     def send_log(self, msg):
-        """등록한 모든 사용자에게 로그 전송
+        """
+        등록한 모든 사용자에게 로그 전송
 
         :param msg:
         :return:
@@ -65,7 +66,8 @@ class _Telegram(threading.Thread):
             self.send_msg(chat_id, msg)
 
     def send_msg(self, chat_id, msg):
-        """해당하는 id에 메시지 전송
+        """
+        해당하는 id에 메시지 전송
 
         :param chat_id:
         :param msg:
@@ -74,7 +76,8 @@ class _Telegram(threading.Thread):
         self.bot.sendMessage(chat_id, msg)
 
     def msg_handler(self, msg):
-        """메시지 핸들러
+        """
+        메시지 핸들러
 
         콜백으로 동작한다
         :param msg:
@@ -83,7 +86,7 @@ class _Telegram(threading.Thread):
         # 사용자가 보내온 메시지 정리
         content_type, chat_type, chat_id = glance(msg)
 
-        # 보낸 메시지가 텍스트라면 echo
+        # 보낸 메시지가 텍스트라면 해당하는 명령 수행
         if content_type is 'text':
             if msg['text'] == '/enter':
                 self.chat_ids.add(chat_id)
@@ -93,7 +96,7 @@ class _Telegram(threading.Thread):
                 self.chat_ids.remove(chat_id)
                 self.queue.put((0, 'Chat_id(%d) is deleted from Telelogram' % chat_id))
                 self.queue.put((0, 'current users: %d' % len(self.chat_ids)))
-            else:
+            else:  # 해당없는 텍스트는 echo
                 self.queue.put((0, 'Chat_Id(%d) said \'%s\'' % (chat_id, msg['text'])))
 
     def run(self):
@@ -144,6 +147,10 @@ class _TelegramHandler(logging.StreamHandler):
             msg = self.format(record)
             self.last_msg = msg
 
+            # 큐가 너무 길 경우 ignore silently (1000 개 보내는데 보통 8분 소요)
+            if len(self.queue.queue) > 100:
+                raise IOError
+
             # 텔레그램에 전달
             self.queue.put((1, msg))
             self.flush()
@@ -159,7 +166,7 @@ class _TelegramHandler(logging.StreamHandler):
 
 def _exception_hook(exc_type, exc_value, exc_traceback):
     """
-    Unhandled exption 을 위한 전역 예외처리기
+    Unhandled exception 을 위한 전역 예외처리기
 
     :param exc_type:
     :param exc_value:
@@ -203,7 +210,7 @@ def setup_log(logpath=None, logname=__name__, loglevel=DEBUG, apikey=None, hook=
     :type apikey: str
     :param hook: 전역 예외처리 훅 설치 여부
     :type hook: bool
-    :param keepalive: keep alive 전송 간격
+    :param keepalive: keep alive 전송 간격 (초)
     :type keepalive: int
     """
     # exception_hook 을 위한 글로벌 로거명 설정
